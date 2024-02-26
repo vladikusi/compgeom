@@ -1,0 +1,188 @@
+#version 400
+
+#define MAX_NUM_LIGHTS 10
+
+struct DirLight //Фоновый освещение
+{ 
+	vec3 direction; //Направление света
+
+	//Параметры компонент света
+	vec3 ambient; //Фоновый цвет
+	vec3 diffuse; //Дифузный цвет
+	vec3 specular; //Зеркальный цвет
+};
+struct PointLight //Точечный источник освещения
+{
+	vec3 position; //Позиция
+	//Параметры затухания
+	float constant; //Константный коэффициент
+	float linear; //Коэффициент линейного затухания
+	float quadratic; //Коэффициент квадратичного затухания
+
+	//Параметры компонент света
+	vec3 ambient;
+	vec3 diffuse;
+	vec3 specular;
+};
+struct SpotLight //Направленный источник освещения
+{
+	vec3 position; //Позиция
+	vec3 direction; //Направление света
+	//Параметры угла
+	float cutOff; //Косинус угола, по достижении которого свет начинает плавно затухать
+	// до достижения порогового угла
+	float outerCutOff; //Косинус Пороговый угол
+
+	//Параметры затухания
+	float constant;
+	float linear;
+	float quadratic;
+
+	//Параметры компонент света
+	vec3 ambient;
+	vec3 diffuse;
+	vec3 specular;
+};
+
+
+struct LightsInfo {
+	DirLight dirLight; //Фоновое освещение
+	PointLight pointLights[MAX_NUM_LIGHTS];//Точечные источники освещения
+	SpotLight spotLights[MAX_NUM_LIGHTS];// Направленные источники освещения
+	int numPLights; //Кол-во точечных источников
+	int numSLights; //Кол-во направленных источников
+};
+struct Material {
+	sampler2D texture; //Текстура поверхности объекта
+	sampler2D specularmap; // Текстура карты отражений
+	float shininess; //Степень отражения
+};
+
+in vec3 normal;
+in vec3 f_pos;
+in vec2 texture_coords;
+
+
+uniform LightsInfo lights;
+uniform Material material;
+uniform vec3 campos;
+
+
+
+
+
+
+
+
+vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir) //Вычисление фонового света
+{
+	//Нормализация направления света
+	vec3 lightDir = normalize(-light.direction);
+	// Диффузный коэффициент
+	float diff = max(dot(normal, lightDir), 0.0);  //dot - cкалярное произведение двух векторов
+	// Отражённый коэффициент
+	vec3 reflectDir = reflect(-lightDir, normal); //reflect - вычисляет направление отражения
+	float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
+	// Результирующие компоненты с учётом материала
+	vec3 ambient = light.ambient * vec3(texture(material.texture, texture_coords));
+	vec3 diffuse = light.diffuse * diff * vec3(texture(material.texture, texture_coords));
+	vec3 specular = light.specular * spec * vec3(texture(material.specularmap, texture_coords));
+	return (ambient + diffuse + specular);
+}
+vec3 CalcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir) //Вычисление точечного света
+{
+	//Вычисление вектора света
+	vec3 lightDir = normalize(light.position - fragPos);
+	// Диффузный коэффициент
+	float diff = max(dot(normal, lightDir), 0.0);
+	//  Отражённый коэффициент
+	vec3 reflectDir = reflect(-lightDir, normal);
+	float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
+	// Затухание
+	float distance = length(light.position - fragPos);
+	float attenuation = 1.0 / (light.constant + light.linear * distance +
+		light.quadratic * (distance * distance));
+	// Результирующие компоненты с учётом материала
+	vec3 ambient = light.ambient * vec3(texture(material.texture, texture_coords));
+	vec3 diffuse = light.diffuse * diff * vec3(texture(material.texture, texture_coords));
+	vec3 specular = light.specular * spec * vec3(texture(material.specularmap, texture_coords));
+	//Влияние затухания
+	ambient *= attenuation;
+	diffuse *= attenuation;
+	specular *= attenuation;
+	return (ambient + diffuse + specular);
+}
+vec3 CalcSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir)//Вычисление направленного света
+{
+	//Вычисление вектора света
+	vec3 lightDir = normalize(light.position - fragPos);
+
+	vec3 result;
+
+	//Вычисление косинуса угла к фрагменту
+	float theta = dot(lightDir, normalize(-light.direction));
+
+	//Так как угол передан в виде косинуса, найденный угол дожен быть больше заданного
+	if (theta > light.cutOff) 
+	{
+		// Фоновая компонента
+		vec3 ambient = light.ambient * vec3(texture(material.texture, texture_coords));
+
+		// Диффузная компонента 
+		vec3 norm = normalize(normal);
+		float diff = max(dot(norm, lightDir), 0.0);
+		vec3 diffuse = light.diffuse * diff * vec3(texture(material.texture, texture_coords));
+
+		// Отражённая компонента
+		vec3 viewDir = normalize(campos - fragPos);
+		vec3 reflectDir = reflect(-lightDir, norm);
+		float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
+		vec3 specular = light.specular * spec * vec3(texture(material.specularmap, texture_coords));
+
+		// Затухание
+		float distance = length(light.position - fragPos);
+		float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
+
+		// Затухание не должно влиять на фоновую компоненту
+		diffuse *= attenuation;
+		specular *= attenuation;
+
+		result = ambient + diffuse + specular;
+	}
+	else
+	{
+		// Если фрагмен не в конусе - только фоновая компонента оказывает влияние на результат
+		result = light.ambient * vec3(texture(material.texture, texture_coords));
+	}
+
+	return result;
+}
+
+
+
+
+
+out vec4 frag_color;
+
+void main () {
+ 	//Нормализация вектора нормали
+	vec3 norm = normalize(normal);
+
+	//Определение направления взгляда
+	vec3 viewDir = normalize(campos - f_pos);
+
+	//Учёт направленного фонового освещения
+	vec3 result = CalcDirLight(lights.dirLight, norm, viewDir);
+
+	//Учёт точечных источников света
+	for (int i = 0; i < lights.numPLights; i++)
+		result += CalcPointLight(lights.pointLights[i], norm, f_pos, viewDir);
+
+	//Учёт направленных источников света
+	for (int i = 0; i < lights.numSLights; i++)
+		result += CalcSpotLight(lights.spotLights[i], norm, f_pos, viewDir);
+	
+	//Итоговый цвет фрагмента
+	frag_color = vec4(result, 1.0);
+
+}
